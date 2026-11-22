@@ -5,6 +5,7 @@
   "description": "Zero-dependency outbound IP + WebSocket echo probe for Cobraploy (BR) free beta",
   "main": "server.js",
   "scripts": {
+    "build": "node -e \"console.log('no build step needed')\"",
     "start": "node server.js"
   },
   "engines": {

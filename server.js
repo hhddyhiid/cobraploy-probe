@@ -16,7 +16,7 @@ const http = require('http');
 const crypto = require('crypto');
 const os = require('os');
 
-const PORT = parseInt(process.env.PORT || '8080', 10);
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const KEEPALIVE_MS = parseInt(process.env.WS_KEEPALIVE_MS || '0', 10);
 const STARTED = Date.now();
 let lastActivity = Date.now();

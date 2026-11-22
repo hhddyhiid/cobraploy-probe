@@ -1,0 +1,13 @@
+{
+  "name": "cobraploy-probe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency outbound IP + WebSocket echo probe for Cobraploy (BR) free beta",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

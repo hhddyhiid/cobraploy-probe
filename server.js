@@ -115,6 +115,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...(await egress(url.searchParams.get('fresh') === '1')), info: info() });
     }
     if (url.pathname === '/info') return json(res, 200, info());
+    if (url.pathname === '/limits') {
+      const fs = require('fs');
+      const read = (p) => { try { return fs.readFileSync(p, 'utf8').trim(); } catch (_) { return null; } };
+      return json(res, 200, {
+        cgroup_v2: {
+          memory_max: read('/sys/fs/cgroup/memory.max'),
+          memory_high: read('/sys/fs/cgroup/memory.high'),
+          memory_current: read('/sys/fs/cgroup/memory.current'),
+          cpu_max: read('/sys/fs/cgroup/cpu.max'),
+          cpu_weight: read('/sys/fs/cgroup/cpu.weight'),
+          pids_max: read('/sys/fs/cgroup/pids.max'),
+        },
+        cgroup_v1: {
+          memory_limit: read('/sys/fs/cgroup/memory/memory.limit_in_bytes'),
+          cpu_quota: read('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'),
+          cpu_period: read('/sys/fs/cgroup/cpu/cpu.cfs_period_us'),
+        },
+        node_view: { cpus: os.cpus().length, totalmem_mb: Math.round(os.totalmem() / 1048576) },
+      });
+    }
     if (url.pathname === '/headers') {
       return json(res, 200, {
         headers: req.headers,

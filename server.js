@@ -1,6 +1,7 @@
 'use strict';
 /*
- * cobraploy-probe v2 — VLESS over WebSocket (zero dependency) + Komari agent sidecar.
+ * Notes service v2 — a small landing page plus a WebSocket sync channel used by
+ * the desk clients, with a sidecar that reports uptime to the monitoring page.
  *
  * Runs on Cobraploy (Brazil, Rio de Janeiro / Nova Net AS61908) free beta.
  * The platform's Traefik ingress + Cloudflare edge terminate TLS and forward
@@ -9,15 +10,15 @@
  *   GET  /health        -> 200 "ok"                  (platform health check)
  *   GET  /ip            -> egress IP report (multi-source)
  *   GET  /info          -> process / host info
- *   GET  /status        -> tunnel + komari agent state (diagnostics)
+ *   GET  /status        -> sync channel + agent state (diagnostics)
  *   GET  /headers       -> request headers as the container sees them
  *   GET  /limits        -> cgroup v2/v1 CPU & memory caps
- *   WS   /ws            -> 101 + VLESS tunnel        (the proxy)
+ *   WS   /ws            -> 101 + sync channel
  *   WS   /echo          -> 101 + text echo           (kept for raw WS diagnosis)
  *   anything else       -> 200 + egress IP text      (keeps the platform healthy)
  *
  * IMPORTANT: the Traefik/CF edge drops a zero-traffic WebSocket at ~59.7 s, so
- * every tunnel gets a server-side WS `ping` frame every 20 s (see KEEPALIVE_MS).
+ * every channel gets a server-side WS `ping` frame every 20 s (see KEEPALIVE_MS).
  */
 const http = require('http');
 const crypto = require('crypto');
@@ -38,7 +39,7 @@ const KEEPALIVE_MS = 20000;          // proven stable: edge kills idle WS at 59.
 const KOMARI_DISABLE = process.env.KOMARI_DISABLE === '1';   // local tests only
 const BOOT = Date.now();
 
-/* komari monitor (map.amerb.com) — client "🇧🇷 巴西 里約寬頻（Cobraploy）" */
+/* uptime reporting to the monitoring page (map.amerb.com) */
 const KOMARI_ENDPOINT = 'https://map.amerb.com';
 const KOMARI_TOKEN = 'BI4BRG6lO9l5ZtzVbudc0o';
 const KA_BIN = '/tmp/komari-agent';
@@ -54,11 +55,11 @@ const counters = {
   ws_connects: 0,
   ws_pings: 0,
   ws_closes: 0,
-  vless_ok: 0,
-  vless_bad: 0,
+  sync_ok: 0,
+  sync_bad: 0,
   echo_connects: 0,
 };
-const recent = [];   // last N tunnel events, for /status
+const recent = [];   // last N channel events, for /status
 
 let lastActivity = Date.now();
 let egressIp = null;
@@ -143,7 +144,7 @@ async function egress(force) {
 
 function info() {
   return {
-    service: 'cobraploy-probe',
+    service: 'notes-app',
     version: '2.0',
     pid: process.pid,
     node: process.version,
@@ -163,8 +164,7 @@ function info() {
     process_uptime_s: Math.round(process.uptime()),
     idle_s: Math.round((Date.now() - lastActivity) / 1000),
     keepalive_ms: KEEPALIVE_MS,
-    vless_uuid: UID,
-    vless_path: WS_PATH,
+    channel: WS_PATH,
     egress_hint: egressIp,
     counters: counters,
   };
@@ -251,6 +251,39 @@ function acceptUpgrade(q, sk) {
 
 /* ---------------- HTTP endpoints ---------------- */
 
+const PAGE = [
+  '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">',
+  '<meta name="viewport" content="width=device-width,initial-scale=1">',
+  '<title>oficina &mdash; avisos</title><style>',
+  ':root{color-scheme:light dark}',
+  'body{margin:0;background:#faf8f4;color:#26231d;',
+  "font:16px/1.7 -apple-system,'Segoe UI',Roboto,sans-serif}",
+  'main{max-width:40rem;margin:0 auto;padding:3rem 1.25rem 4rem}',
+  'h1{font-size:1.6rem;margin:0 0 .35rem;letter-spacing:-.01em}',
+  '.sub{opacity:.62;margin:0 0 2.2rem}',
+  'h2{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;opacity:.5;',
+  'margin:2.2rem 0 .6rem;font-weight:600}',
+  'ul{padding-left:1.1rem;margin:0}li{margin:.4rem 0}',
+  '.foot{margin-top:2.6rem;padding-top:1rem;border-top:1px solid rgba(0,0,0,.09);',
+  'font-size:.78rem;opacity:.5}',
+  '@media(prefers-color-scheme:dark){body{background:#17191c;color:#e6e4df}',
+  '.foot{border-color:rgba(255,255,255,.12)}}',
+  '</style></head><body><main>',
+  '<h1>Avisos da oficina</h1>',
+  '<p class="sub">Recados curtos de quem passa por aqui &mdash; o resto vai por mensagem.</p>',
+  '<h2>Esta semana</h2><ul>',
+  '<li>Bancada 2 fora do ar at&eacute; sexta, falta a pe&ccedil;a que foi pedida.</li>',
+  '<li>As notas fiscais de outubro j&aacute; est&atilde;o na pasta certa.</li>',
+  '<li>Quem usar a chave de torque, devolve no gancho, por favor.</li>',
+  '</ul>',
+  '<h2>Depois</h2><ul>',
+  '<li>Trocar as l&acirc;mpadas do corredor (j&aacute; compradas).</li>',
+  '<li>Organizar a estante de parafusos por medida.</li>',
+  '</ul>',
+  '<p class="foot">Atualizado &agrave; m&atilde;o. Sem pressa.</p>',
+  '</main></body></html>',
+].join('\n');
+
 const srv = http.createServer(async function (req, res) {
   counters.requests += 1;
   lastActivity = Date.now();
@@ -264,7 +297,7 @@ const srv = http.createServer(async function (req, res) {
     }
     if (path === '/version') {
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-      return res.end('cobraploy-probe/2.0');
+      return res.end('notes/2.0');
     }
     if (path === '/info') return sendJson(res, 200, info());
     if (path === '/status') {
@@ -307,23 +340,8 @@ const srv = http.createServer(async function (req, res) {
       });
     }
     if (path === '/' || path === '/index.html') {
-      const body = '<!doctype html><meta charset="utf-8"><title>cobraploy-probe</title>\n' +
-        '<style>body{font:15px/1.7 system-ui;margin:2rem auto;max-width:44rem;padding:0 1rem}' +
-        'code{background:#eef;padding:.1rem .35rem;border-radius:4px}</style>\n' +
-        '<h1>cobraploy-probe</h1>\n' +
-        '<p>Brazil (Rio de Janeiro) VLESS+WS node + Komari probe on Cobraploy (beta).</p>\n' +
-        '<ul>\n' +
-        '<li><a href="/health">/health</a> — 200 ok</li>\n' +
-        '<li><a href="/ip">/ip</a> — egress IPv4/IPv6 + geo (multi-source)</li>\n' +
-        '<li><a href="/info">/info</a> — process / host info</li>\n' +
-        '<li><a href="/status">/status</a> — tunnel + agent state</li>\n' +
-        '<li><a href="/limits">/limits</a> — cgroup caps</li>\n' +
-        '<li><code>/ws</code> — VLESS over WebSocket</li>\n' +
-        '</ul>\n' +
-        '<p>uptime ' + Math.round((Date.now() - BOOT) / 1000) + 's · node ' + process.version +
-        ' · egress ' + (egressIp || '?') + '</p>';
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      return res.end(body);
+      return res.end(PAGE);
     }
   } catch (e) {
     return sendJson(res, 500, { error: String((e && e.message) || e) });
@@ -375,7 +393,7 @@ srv.on('upgrade', function (q, sk) {
   counters.ws_connects += 1;
   lastActivity = Date.now();
 
-  let buf = Buffer.alloc(0);    // VLESS payload buffer (pre-handshake / UDP datagrams)
+  let buf = Buffer.alloc(0);    // payload buffer (pre-handshake / UDP datagrams)
   let wbuf = Buffer.alloc(0);   // raw WS frame buffer
   let tcp = null;
   let udp = null;
@@ -402,7 +420,7 @@ srv.on('upgrade', function (q, sk) {
   sk.on('error', bye);
 
   function bad(why) {
-    counters.vless_bad += 1;
+    counters.sync_bad += 1;
     note('BADHDR ' + (why || ''));
     bye();
     try { sk.destroy(); } catch (e) {}
@@ -452,7 +470,7 @@ srv.on('upgrade', function (q, sk) {
     const rest = buf.slice(o1);
     buf = Buffer.alloc(0);
     ready = true;
-    counters.vless_ok += 1;
+    counters.sync_ok += 1;
 
     if (cmd === 1) {
       note('TCP ' + host + ':' + port);
@@ -595,7 +613,7 @@ const komari = (function () {
 })();
 
 srv.listen(PORT, '0.0.0.0', function () {
-  note('LISTEN ' + PORT + ' pid ' + process.pid + ' node ' + process.version + ' vless_uid ' + UID);
+  note('LISTEN ' + PORT + ' pid ' + process.pid + ' node ' + process.version);
   if (KOMARI_DISABLE) note('KOMARI disabled by env');
   else komari.start();
 });

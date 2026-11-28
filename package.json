@@ -1,8 +1,8 @@
 {
-  "name": "cobraploy-probe",
+  "name": "notes-app",
   "version": "2.0.0",
   "private": true,
-  "description": "Brazil (Rio) VLESS over WebSocket node + Komari agent sidecar for Cobraploy free beta — zero dependency",
+  "description": "Landing page plus a WebSocket sync channel and an uptime sidecar for the Cobraploy free beta — zero dependency",
   "main": "server.js",
   "scripts": {
     "build": "node -e \"console.log('no build step needed')\"",
